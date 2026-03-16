@@ -6,7 +6,9 @@
   "scripts": {
     "anvil": "anvil --host 127.0.0.1 --port 8545 --block-time 1",
     "deploy": "forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast",
-    "simulate": "forge script script/SimulateAttack.s.sol --rpc-url http://127.0.0.1:8545 --broadcast",
+    "simulate:foundry": "forge script script/SimulateAttack.s.sol --rpc-url http://127.0.0.1:8545 --broadcast",
+    "sim": "node detector/simulate.js",
+    "sim:stress": "node detector/simulate.js --attacks 100 --baseline 200",
     "export": "node detector/exportRaw.js",
     "pipeline:no-abi": "node detector/runPipeline.js without_abi",
     "pipeline:abi": "node detector/runPipeline.js with_abi",

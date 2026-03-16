@@ -5,6 +5,9 @@
  *          state diffs, ABI, contract metadata, event signatures,
  *          and ground-truth attack markers.
  *
+ * Supports multiple attacks — classifies each large mint + subsequent
+ * staging/exit transfers as separate attack cycles.
+ *
  * Usage:  node detector/exportRaw.js
  */
 import { ethers } from 'ethers';
@@ -34,10 +37,6 @@ async function main() {
   const latestBlock = await provider.getBlockNumber();
   console.log(`📦 Latest block: ${latestBlock}`);
 
-  // Find the deployed DemoToken address from the first deployment tx.
-  // The owner's first tx is the deployment.
-  const ownerLower = ACCOUNTS.owner.toLowerCase();
-
   // Scan all blocks for relevant transactions
   const allTxHashes = [];
   const blockCache  = {};
@@ -60,9 +59,16 @@ async function main() {
   const receipts     = [];
   let tokenAddress   = null;
 
-  for (const { txHash } of allTxHashes) {
+  const progressInterval = Math.max(1, Math.floor(allTxHashes.length / 10));
+
+  for (let i = 0; i < allTxHashes.length; i++) {
+    const { txHash } = allTxHashes[i];
     const tx = await provider.getTransaction(txHash);
     if (!tx) continue;
+
+    if (i % progressInterval === 0) {
+      console.log(`   📥 Collecting tx ${i + 1}/${allTxHashes.length}...`);
+    }
 
     const txData = {
       hash:             tx.hash,
@@ -86,7 +92,6 @@ async function main() {
     // Receipt
     const receipt = await provider.getTransactionReceipt(txHash);
     if (receipt) {
-      // Detect contract deployment
       if (receipt.contractAddress) {
         tokenAddress = receipt.contractAddress;
       }
@@ -147,20 +152,23 @@ async function main() {
 
   // ─── Write raw traces (debug_traceTransaction) ────────────
   let tracesCollected = 0;
-  for (const { txHash } of allTxHashes) {
+  for (let i = 0; i < allTxHashes.length; i++) {
+    const { txHash } = allTxHashes[i];
     try {
       const trace = await provider.send('debug_traceTransaction', [txHash, { tracer: 'callTracer' }]);
       writeJSONBigInt(PATHS.rawTraces, `${txHash}.json`, trace);
       tracesCollected++;
 
-      // Extract internal calls from trace
       const internals = extractInternalCalls(trace, txHash);
       if (internals.length > 0) {
         writeJSON(PATHS.rawInternalCalls, `${txHash}.json`, internals);
       }
     } catch (e) {
-      // Anvil may not support debug_traceTransaction with callTracer in all configs
-      console.warn(`⚠️  Could not trace ${txHash}: ${e.message}`);
+      // Anvil may not support debug_traceTransaction in all configs
+    }
+
+    if (i % progressInterval === 0 && i > 0) {
+      console.log(`   🔍 Tracing ${i + 1}/${allTxHashes.length}...`);
     }
   }
   console.log(`✅ Traced ${tracesCollected} transactions`);
@@ -172,9 +180,7 @@ async function main() {
       const diff = await provider.send('debug_traceTransaction', [txHash, { tracer: 'prestateTracer', tracerConfig: { diffMode: true } }]);
       writeJSONBigInt(PATHS.rawStateDiffs, `${txHash}.json`, diff);
       stateDiffsCollected++;
-    } catch (_e) {
-      // Not all Anvil versions support this
-    }
+    } catch (_e) {}
   }
   if (stateDiffsCollected > 0) console.log(`✅ Wrote ${stateDiffsCollected} state diffs`);
   else console.log(`ℹ️  State diffs not available from Anvil (optional)`);
@@ -223,11 +229,12 @@ async function main() {
   console.log(`✅ Wrote event signature reference`);
 
   // ─── Classify transactions and write ground truth ─────────
-  // Classify based on sender, selector, and amount
   const classifications = classifyTransactions(transactions, receipts, tokenAddress);
   writeJSON(PATHS.rawGroundTruth, 'ground_truth.json', classifications);
   writeJSON(PATHS.rawGroundTruth, 'attack_markers.json', classifications.attackMarkers);
   console.log(`✅ Wrote ground-truth markers`);
+  console.log(`   📊 Attacks detected: ${classifications.attackMarkers.attackCycles.length}`);
+  console.log(`   📊 Suspicious txs:   ${classifications.attackMarkers.attackCycles.length * 3}`);
 
   // ─── Summary ──────────────────────────────────────────────
   writeJSON(PATHS.raw, '_export_summary.json', {
@@ -270,7 +277,7 @@ function extractInternalCalls(trace, txHash, depth = 0, results = []) {
   return results;
 }
 
-// ─── Transaction classification ─────────────────────────────
+// ─── Transaction classification (multi-attack aware) ────────
 function classifyTransactions(transactions, receipts, tokenAddress) {
   const ownerAddr   = ACCOUNTS.owner.toLowerCase();
   const stagingAddr = ACCOUNTS.staging.toLowerCase();
@@ -278,11 +285,14 @@ function classifyTransactions(transactions, receipts, tokenAddress) {
   const tokenAddr   = tokenAddress ? tokenAddress.toLowerCase() : null;
 
   const classified = [];
-  let suspiciousMintTx   = null;
-  let stagingTransferTx  = null;
-  let exitTransferTx     = null;
-  const baselineMintTxs  = [];
+  const baselineMintTxs     = [];
   const baselineTransferTxs = [];
+
+  // Attack cycle tracking — multiple attacks supported
+  const attackCycles        = [];
+  const suspiciousMintTxs   = [];
+  const stagingTransferTxs  = [];
+  const exitTransferTxs     = [];
 
   // Sort transactions by block number and index
   const sorted = [...transactions].sort((a, b) =>
@@ -291,21 +301,61 @@ function classifyTransactions(transactions, receipts, tokenAddress) {
       : a.transactionIndex - b.transactionIndex
   );
 
-  // Track mints to detect the abnormally large one
-  const mintAmounts = [];
+  // Pass 1: Collect all mint amounts to establish baseline
+  const allMintAmounts = [];
+  for (const tx of sorted) {
+    const from     = tx.from?.toLowerCase();
+    const to       = tx.to?.toLowerCase();
+    const selector = tx.selector;
+
+    if (selector === SELECTORS.mint && to === tokenAddr && from === ownerAddr) {
+      const receipt = receipts.find(r => r.transactionHash === tx.hash);
+      let transferAmount = null;
+      if (receipt) {
+        for (const log of receipt.logs) {
+          if (log.topics[0] === TOPICS.Transfer && log.data && log.data !== '0x') {
+            transferAmount = BigInt(log.data);
+          }
+        }
+      }
+      allMintAmounts.push({ hash: tx.hash, amount: transferAmount, blockNumber: tx.blockNumber });
+    }
+  }
+
+  // Determine baseline threshold using statistical approach:
+  // Sort mint amounts, baseline = bottom 50% or amounts below median * 10
+  const sortedAmounts = allMintAmounts
+    .filter(m => m.amount !== null)
+    .sort((a, b) => (a.amount < b.amount ? -1 : a.amount > b.amount ? 1 : 0));
+
+  let baselineMaxAmount = 0n;
+  if (sortedAmounts.length > 0) {
+    const medianIdx = Math.floor(sortedAmounts.length / 2);
+    const median = sortedAmounts[medianIdx].amount;
+    // Anything > 10x median is suspicious
+    baselineMaxAmount = median * 10n;
+    // Fallback: if all mints are the same size, use first mint * 10
+    if (baselineMaxAmount === 0n) {
+      baselineMaxAmount = sortedAmounts[0].amount * 10n;
+    }
+  }
+
+  // Pass 2: Classify each transaction
+  let pendingSuspiciousMint = false;  // Tracks whether we're in an attack window
 
   for (const tx of sorted) {
     const from     = tx.from?.toLowerCase();
     const to       = tx.to?.toLowerCase();
     const selector = tx.selector;
 
-    // Find associated receipt to get transfer event amounts
     const receipt = receipts.find(r => r.transactionHash === tx.hash);
     let transferAmount = null;
+    let transferDest   = null;
     if (receipt) {
       for (const log of receipt.logs) {
         if (log.topics[0] === TOPICS.Transfer && log.data && log.data !== '0x') {
           transferAmount = BigInt(log.data);
+          transferDest = log.topics[2] ? '0x' + log.topics[2].slice(26) : null;
         }
       }
     }
@@ -313,55 +363,56 @@ function classifyTransactions(transactions, receipts, tokenAddress) {
     let classification = 'baseline';
     let isSuspicious   = false;
 
-    if (selector === SELECTORS.mint && to === tokenAddr && from === ownerAddr) {
-      // It's a mint by the owner — is it normal or suspicious?
-      mintAmounts.push({ hash: tx.hash, amount: transferAmount });
-
-      // The 1,000,000 ether mint (1e24 wei) — 10000x larger than norm
-      const normalMax = 100n * (10n ** 18n); // 100 tokens
-      if (transferAmount && transferAmount > normalMax * 10n) {
-        classification   = 'suspicious_mint';
-        isSuspicious     = true;
-        suspiciousMintTx = tx.hash;
+    if (!tx.to) {
+      // Contract deployment
+      classification = 'contract_deployment';
+    } else if (selector === SELECTORS.mint && to === tokenAddr && from === ownerAddr) {
+      // Owner mint — suspicious if amount exceeds baseline threshold
+      if (transferAmount && transferAmount > baselineMaxAmount) {
+        classification = 'suspicious_mint';
+        isSuspicious = true;
+        suspiciousMintTxs.push(tx.hash);
+        pendingSuspiciousMint = true;
       } else {
         classification = 'baseline_mint';
         baselineMintTxs.push(tx.hash);
       }
     } else if (selector === SELECTORS.transfer && to === tokenAddr) {
-      // Transfer call — who is sending to whom?
-      if (from === ownerAddr && receipt) {
-        // Check if the owner is sending to staging
-        for (const log of receipt.logs) {
-          if (log.topics[0] === TOPICS.Transfer) {
-            const dest = '0x' + log.topics[2].slice(26);
-            if (dest.toLowerCase() === stagingAddr && suspiciousMintTx) {
-              classification      = 'suspicious_staging_transfer';
-              isSuspicious        = true;
-              stagingTransferTx   = tx.hash;
-            }
-          }
-        }
-        if (!isSuspicious) {
+      // Transfer — check for suspicious staging/exit patterns
+      if (from === ownerAddr && transferDest && transferDest.toLowerCase() === stagingAddr) {
+        // Owner → staging with large amount = suspicious staging
+        if (transferAmount && transferAmount > baselineMaxAmount) {
+          classification = 'suspicious_staging_transfer';
+          isSuspicious = true;
+          stagingTransferTxs.push(tx.hash);
+        } else {
           classification = 'baseline_transfer';
           baselineTransferTxs.push(tx.hash);
         }
-      } else if (from === stagingAddr && receipt) {
-        for (const log of receipt.logs) {
-          if (log.topics[0] === TOPICS.Transfer) {
-            const dest = '0x' + log.topics[2].slice(26);
-            if (dest.toLowerCase() === exitAddr) {
-              classification    = 'suspicious_exit_transfer';
-              isSuspicious      = true;
-              exitTransferTx    = tx.hash;
-            }
-          }
+      } else if (from === stagingAddr && transferDest && transferDest.toLowerCase() === exitAddr) {
+        // Staging → exit = suspicious exit
+        if (transferAmount && transferAmount > baselineMaxAmount) {
+          classification = 'suspicious_exit_transfer';
+          isSuspicious = true;
+          exitTransferTxs.push(tx.hash);
+
+          // Complete attack cycle
+          const cycleIdx = exitTransferTxs.length - 1;
+          attackCycles.push({
+            cycleIndex: cycleIdx,
+            mintTxHash: suspiciousMintTxs[cycleIdx] || null,
+            stagingTxHash: stagingTransferTxs[cycleIdx] || null,
+            exitTxHash: tx.hash,
+          });
+          pendingSuspiciousMint = false;
+        } else {
+          classification = 'baseline_transfer';
+          baselineTransferTxs.push(tx.hash);
         }
       } else {
         classification = 'baseline_transfer';
         baselineTransferTxs.push(tx.hash);
       }
-    } else if (!tx.to) {
-      classification = 'contract_deployment';
     }
 
     classified.push({
@@ -379,13 +430,23 @@ function classifyTransactions(transactions, receipts, tokenAddress) {
   return {
     classified,
     attackMarkers: {
-      suspiciousMintTxHash:   suspiciousMintTx,
-      stagingTransferTxHash:  stagingTransferTx,
-      exitTransferTxHash:     exitTransferTx,
+      // Legacy single-attack fields (for backward compat — uses first attack)
+      suspiciousMintTxHash:   suspiciousMintTxs[0] || null,
+      stagingTransferTxHash:  stagingTransferTxs[0] || null,
+      exitTransferTxHash:     exitTransferTxs[0] || null,
+
+      // Multi-attack fields
+      attackCycles,
+      allSuspiciousMintTxs: suspiciousMintTxs,
+      allStagingTransferTxs: stagingTransferTxs,
+      allExitTransferTxs: exitTransferTxs,
+
       privilegedActorAddress: ACCOUNTS.owner,
       stagingWalletAddress:   ACCOUNTS.staging,
       exitWalletAddress:      ACCOUNTS.exit,
       tokenContractAddress:   tokenAddress,
+      baselineThreshold:      baselineMaxAmount.toString(),
+
       expectedSuspiciousPath: [
         `mint → ${ACCOUNTS.owner} (privileged actor)`,
         `transfer → ${ACCOUNTS.staging} (staging wallet)`,
@@ -397,9 +458,11 @@ function classifyTransactions(transactions, receipts, tokenAddress) {
       totalTransactions:      sorted.length,
       baselineMints:          baselineMintTxs.length,
       baselineTransfers:      baselineTransferTxs.length,
-      suspiciousMint:         suspiciousMintTx ? 1 : 0,
-      suspiciousStaging:      stagingTransferTx ? 1 : 0,
-      suspiciousExit:         exitTransferTx ? 1 : 0,
+      suspiciousMints:        suspiciousMintTxs.length,
+      suspiciousStaging:      stagingTransferTxs.length,
+      suspiciousExits:        exitTransferTxs.length,
+      totalAttackCycles:      attackCycles.length,
+      totalSuspicious:        suspiciousMintTxs.length + stagingTransferTxs.length + exitTransferTxs.length,
     },
   };
 }
