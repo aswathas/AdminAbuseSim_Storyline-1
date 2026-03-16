@@ -25,6 +25,7 @@ import { runHeuristics } from './heuristics.js';
 import { generateSignals } from './signals.js';
 import { generateReport } from './reportOllama.js';
 import { generateGraphs } from './graphs.js';
+import { execSync } from 'child_process';
 
 function ensureDir(d) { fs.mkdirSync(d, { recursive: true }); }
 
@@ -161,13 +162,22 @@ async function main() {
   const totalElapsed = ((Date.now() - totalStart) / 1000).toFixed(1);
   writeRunManifest(runDir, runId, modes, parseFloat(totalElapsed));
 
-  console.log(`${'█'.repeat(60)}`);
-  console.log(`  RUN COMPLETE: ${runId}`);
-  console.log(`  Duration: ${totalElapsed}s`);
-  console.log(`${'█'.repeat(60)}`);
-  console.log(`\n📂 All outputs saved to: ${runDir}`);
-  console.log(`\nInspect results:`);
-  console.log(`  ${path.join(runDir, 'run_manifest.json')}          — Run metadata`);
+  console.log(`\n\u001b[36m✨ Generating Visual Storyboard ...\u001b[0m`);
+  try {
+    execSync(`node detector/storyboard.js ${path.basename(runDir)}`, { stdio: 'inherit' });
+  } catch (e) {
+    console.log(`\u001b[31m❌ Failed to generate storyboard\u001b[0m`);
+  }
+
+  console.log(`\n\u001b[42m\u001b[30m████████████████████████████████████████████████████████████\u001b[0m`);
+  console.log(`\u001b[42m\u001b[30m  RUN COMPLETE: ${path.basename(runDir).padEnd(46)}\u001b[0m`);
+  console.log(`\u001b[42m\u001b[30m  Duration: ${totalElapsed}s${''.padEnd(50 - totalElapsed.length)}\u001b[0m`);
+  console.log(`\u001b[42m\u001b[30m████████████████████████████████████████████████████████████\u001b[0m\n`);
+
+  console.log(`📁 All outputs saved to: \u001b[36m${runDir}\u001b[0m\n`);
+  console.log(`Inspect results:`);
+  console.log(`  \u001b[33m${path.join(runDir, 'storyboard.html').padEnd(70)}\u001b[0m — \u001b[1m⭐ Interactive Presentation (Open in Browser)\u001b[0m`);
+  console.log(`  ${path.join(runDir, 'run_manifest.json').padEnd(70)} — Run metadata`);
   console.log(`  ${path.join(runDir, 'raw_snapshot/')}              — Evidence snapshot`);
   console.log(`  ${path.join(runDir, 'normalized/')}                — Structured records`);
   console.log(`  ${path.join(runDir, 'decoded/')}                   — Decoded views`);
