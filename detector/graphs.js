@@ -213,7 +213,7 @@ function generateTraceMermaid(graph, tokenAddress) {
   for (const node of graph.nodes) {
     const id = `N${counter++}`;
     nodeIds[node.address.toLowerCase()] = id;
-    const label = `${node.label}\\n${shortAddr(node.address)}`;
+    const label = `${node.label}<br/>${shortAddr(node.address)}`;
     if (node.role === 'contract') {
       mmd += `    ${id}[["${label}"]]\n`;
     } else if (node.role === 'privileged_actor') {
@@ -225,7 +225,7 @@ function generateTraceMermaid(graph, tokenAddress) {
 
   // Add zero-address for mint source
   nodeIds['0x0000000000000000000000000000000000000000'] = 'ZERO';
-  mmd += `    ZERO(("Zero Address\\n(Mint Source)"))\n`;
+  mmd += `    ZERO(("Zero Address<br/>(Mint Source)"))\n`;
 
   mmd += '\n';
 
@@ -233,7 +233,7 @@ function generateTraceMermaid(graph, tokenAddress) {
   for (const edge of graph.edges) {
     const srcId  = nodeIds[edge.source.toLowerCase()] || 'UNKNOWN';
     const dstId  = nodeIds[edge.destination.toLowerCase()] || 'UNKNOWN';
-    const label  = `${edge.amountFormatted} DEMO\\n${edge.actionType}`;
+    const label  = `${edge.amountFormatted} DEMO<br/>${edge.actionType}`;
 
     if (edge.suspicious) {
       mmd += `    ${srcId} ==>|"${label}"| ${dstId}\n`;
@@ -270,7 +270,7 @@ function generateTimelineMermaid(timeline) {
   mmd += '    section Baseline Activity\n';
   for (const event of timeline) {
     if (!event.suspicious && event.classification !== 'signal_fired') {
-      const safeLabel = event.eventLabel.replace(/"/g, "'");
+      const safeLabel = event.eventLabel.replace(/"/g, "'").replace(/:/g, "-");
       mmd += `    ${safeLabel} :${event.order}, ${event.order}\n`;
     }
   }
@@ -278,7 +278,7 @@ function generateTimelineMermaid(timeline) {
   mmd += '\n    section Suspicious Activity\n';
   for (const event of timeline) {
     if (event.suspicious && event.classification !== 'signal_fired') {
-      const safeLabel = event.eventLabel.replace(/"/g, "'");
+      const safeLabel = event.eventLabel.replace(/"/g, "'").replace(/:/g, "-");
       mmd += `    ${safeLabel} :crit, ${event.order}, ${event.order}\n`;
     }
   }
@@ -286,7 +286,7 @@ function generateTimelineMermaid(timeline) {
   mmd += '\n    section Signal\n';
   for (const event of timeline) {
     if (event.classification === 'signal_fired') {
-      const safeLabel = event.eventLabel.replace(/"/g, "'");
+      const safeLabel = event.eventLabel.replace(/"/g, "'").replace(/:/g, "-");
       mmd += `    ${safeLabel} :crit, ${event.order}, ${event.order}\n`;
     }
   }

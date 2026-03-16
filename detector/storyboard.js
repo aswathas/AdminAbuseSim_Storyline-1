@@ -125,10 +125,11 @@ function buildHTML(runId, data, narrations) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Forensic Investigation Storyboard — Run ${runId}</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
   mermaid.initialize({ startOnLoad: true, theme: 'dark' });
-  
+</script>
+<script>
   function toggleRaw(id) {
     const el = document.getElementById(id);
     el.style.display = el.style.display === 'block' ? 'none' : 'block';
@@ -154,6 +155,51 @@ function buildHTML(runId, data, narrations) {
     --text-muted: #52525b;
     --border: #27272a;
   }
+
+  /* Accordion styles for Raw Data */
+  details.raw-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 1rem;
+    overflow: hidden;
+  }
+  details.raw-section > summary {
+    padding: 1.2rem 1.5rem;
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--accent);
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(108, 99, 255, 0.05);
+  }
+  details.raw-section > summary::-webkit-details-marker { display: none; }
+  details.raw-section > summary::after {
+    content: '+';
+    font-size: 1.5rem;
+    color: var(--text-dim);
+  }
+  details.raw-section[open] > summary::after { content: '−'; }
+  details.raw-section > .raw-content {
+    padding: 0;
+    background: #000;
+    max-height: 500px;
+    overflow-y: auto;
+  }
+  details.raw-section pre {
+    margin: 0;
+    padding: 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  .json-key { color: #818cf8; }
+  .json-string { color: #a3e635; }
+  .json-number { color: #fbbf24; }
+  .json-boolean { color: #f472b6; }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -953,6 +999,48 @@ Confidence: <span class="highlight-green">HIGH</span>
   </div>
 </section>
 
+<!-- ═══════════════════════ STEP 8: RAW TECHNICAL DATA ═══ -->
+<section class="step" id="step8">
+  <div class="step-number"><span class="num">8</span> DEEP DIVE — Advanced Technical Data</div>
+  <h2>Explore Interactive Raw Logs</h2>
+  <div class="narration">For extreme transparency and forensic auditing, you can explore the exact JSON structures parsed during the pipeline run below. Expand each dataset to read every precise field produced across the Normalized, Decoded, Derived, and Heuristic analytical stages.</div>
+
+  <details class="raw-section">
+    <summary>Normalized Records (Structured Evidence)</summary>
+    <div class="raw-content">
+      <pre><code>${JSON.stringify(normalized, null, 2).replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:').replace(/: "(.*?)"/g, ': <span class="json-string">"$1"</span>').replace(/: (\d+)/g, ': <span class="json-number">$1</span>').replace(/: (true|false)/g, ': <span class="json-boolean">$1</span>')}</code></pre>
+    </div>
+  </details>
+
+  <details class="raw-section">
+    <summary>Decoded Views (With ABI Labels)</summary>
+    <div class="raw-content">
+      <pre><code>${JSON.stringify(decodedAbi, null, 2).replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:').replace(/: "(.*?)"/g, ': <span class="json-string">"$1"</span>').replace(/: (\d+)/g, ': <span class="json-number">$1</span>').replace(/: (true|false)/g, ': <span class="json-boolean">$1</span>')}</code></pre>
+    </div>
+  </details>
+
+  <details class="raw-section">
+    <summary>Derived Forensic Facts</summary>
+    <div class="raw-content">
+      <pre><code>${JSON.stringify(derivedAbi, null, 2).replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:').replace(/: "(.*?)"/g, ': <span class="json-string">"$1"</span>').replace(/: (\d+)/g, ': <span class="json-number">$1</span>').replace(/: (true|false)/g, ': <span class="json-boolean">$1</span>')}</code></pre>
+    </div>
+  </details>
+
+  <details class="raw-section">
+    <summary>Heuristics Engine Results</summary>
+    <div class="raw-content">
+      <pre><code>${JSON.stringify(heurAbi, null, 2).replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:').replace(/: "(.*?)"/g, ': <span class="json-string">"$1"</span>').replace(/: (\d+)/g, ': <span class="json-number">$1</span>').replace(/: (true|false)/g, ': <span class="json-boolean">$1</span>')}</code></pre>
+    </div>
+  </details>
+
+  <details class="raw-section">
+    <summary>Signals Generated (Alerts)</summary>
+    <div class="raw-content">
+      <pre><code>${JSON.stringify(signalsAbi, null, 2).replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:').replace(/: "(.*?)"/g, ': <span class="json-string">"$1"</span>').replace(/: (\d+)/g, ': <span class="json-number">$1</span>').replace(/: (true|false)/g, ': <span class="json-boolean">$1</span>')}</code></pre>
+    </div>
+  </details>
+</section>
+
 <!-- ═══════════════════════ CONCLUSION ═══ -->
 <section class="step" id="conclusion">
   <div class="step-number"><span class="num">✓</span> CONCLUSION</div>
@@ -995,24 +1083,24 @@ async function main() {
 
   // Load all run data
   console.log('📂 Loading run data...');
-  const normalized  = readJSON(path.join(runDir, 'normalized', 'normalized_records.json'));
-  const decodedAbi  = readJSON(path.join(runDir, 'decoded', 'with_abi', 'decoded_records.json'));
+  const normalized = readJSON(path.join(runDir, 'normalized', 'normalized_records.json'));
+  const decodedAbi = readJSON(path.join(runDir, 'decoded', 'with_abi', 'decoded_records.json'));
   const decodedNoAbi = readJSON(path.join(runDir, 'decoded', 'without_abi', 'decoded_records.json'));
-  const derivedAbi  = readJSON(path.join(runDir, 'derived', 'with_abi', 'derived_facts.json'));
-  const heurAbi     = readJSON(path.join(runDir, 'derived', 'with_abi', 'heuristic_results.json'));
-  const signalsAbi  = readJSON(path.join(runDir, 'signals', 'with_abi', 'signals.json'));
+  const derivedAbi = readJSON(path.join(runDir, 'derived', 'with_abi', 'derived_facts.json'));
+  const heurAbi = readJSON(path.join(runDir, 'derived', 'with_abi', 'heuristic_results.json'));
+  const signalsAbi = readJSON(path.join(runDir, 'signals', 'with_abi', 'signals.json'));
   const groundTruth = readJSON(path.join(runDir, 'raw_snapshot', 'attack_markers.json'));
-  const manifest    = readJSON(path.join(runDir, 'run_manifest.json'));
+  const manifest = readJSON(path.join(runDir, 'run_manifest.json'));
 
   let traceGraph, timeline, traceMmd, timelineMmd;
   try {
     traceGraph = readJSON(path.join(runDir, 'graphs', 'trace_graph_with_abi.json'));
-    timeline   = readJSON(path.join(runDir, 'graphs', 'incident_timeline_with_abi.json'));
-    traceMmd   = fs.readFileSync(path.join(runDir, 'graphs', 'trace_graph_with_abi.mmd'), 'utf-8');
+    timeline = readJSON(path.join(runDir, 'graphs', 'incident_timeline_with_abi.json'));
+    traceMmd = fs.readFileSync(path.join(runDir, 'graphs', 'trace_graph_with_abi.mmd'), 'utf-8');
     timelineMmd = fs.readFileSync(path.join(runDir, 'graphs', 'incident_timeline_with_abi.mmd'), 'utf-8');
-  } catch { 
-    traceGraph = { nodes: [], edges: [] }; 
-    timeline = { timeline: [] }; 
+  } catch {
+    traceGraph = { nodes: [], edges: [] };
+    timeline = { timeline: [] };
     traceMmd = 'graph TD\n  A[Missing Data] --> B[Run Pipeline]';
     timelineMmd = 'sequenceDiagram\n  participant System\n  System->>System: Missing Data';
   }
@@ -1020,8 +1108,8 @@ async function main() {
   // Compute summary data
   const suspiciousMint = normalized.find(n => n.classification === 'suspicious_mint');
   const suspiciousFact = derivedAbi.find(f => f.classification === 'suspicious_mint');
-  const suspiciousDec  = decodedAbi.find(d => d.classification === 'suspicious_mint');
-  const noAbiDec       = decodedNoAbi.find(d => d.classification === 'suspicious_mint');
+  const suspiciousDec = decodedAbi.find(d => d.classification === 'suspicious_mint');
+  const noAbiDec = decodedNoAbi.find(d => d.classification === 'suspicious_mint');
 
   const data = {
     normalized, decodedAbi, decodedNoAbi, derivedAbi, heurAbi, signalsAbi,
