@@ -14,7 +14,8 @@
     "pipeline:abi": "node detector/runPipeline.js with_abi",
     "pipeline:all": "node detector/runPipeline.js all",
     "report": "node detector/reportOllama.js",
-    "graphs": "node detector/graphs.js"
+    "graphs": "node detector/graphs.js",
+    "storyboard": "node detector/storyboard.js"
   },
   "dependencies": {
     "ethers": "^6.13.0",
