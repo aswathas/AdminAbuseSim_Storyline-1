@@ -1,203 +1,400 @@
-# Blockchain Forensics MVP — Privileged Mint & Extraction
+# AdminAttackSim — Blockchain Forensics MVP
 
-> A local, file-based, deterministic blockchain forensics MVP that detects and analyzes a simulated **privileged mint and rapid extraction** attack.
+> A local, deterministic blockchain forensics tool that simulates and detects **privileged mint and rapid extraction** attacks on EVM chains.
 
-## 🎯 Attack Story
+## 🎯 What Does This Do?
 
-A privileged actor (contract owner) abuses their `mint` function to create abnormally large tokens, then rapidly extracts them through a staging wallet to an exit wallet:
+1. **Simulates** an insider attack on a local Ethereum chain
+2. **Collects** complete raw evidence (transactions, traces, state diffs, ABI)
+3. **Analyzes** the evidence through a multi-stage forensic pipeline
+4. **Detects** the attack using deterministic heuristic rules
+5. **Generates** two detailed forensic reports per analysis mode
 
-```
-Owner (privileged) ──mint 1M tokens──▶ Self
-                    ──transfer──▶ Staging Wallet
-                                 ──transfer──▶ Exit Wallet
-```
+📖 **Full detailed explanation**: See [SIMULATION_REPORT.md](SIMULATION_REPORT.md) for complete documentation of the attack, detection methodology, and pipeline architecture.
 
-## 🔬 Two Analysis Modes
+---
 
-This MVP runs the **exact same forensic pipeline** in two modes to demonstrate a core principle:
+## 📋 Table of Contents
 
-> **ABI is enrichment, not the foundation of detection.**
+- [Prerequisites](#-prerequisites)
+- [Installation (New Laptop Setup)](#-installation-new-laptop-setup)
+- [Quick Start](#-quick-start)
+- [Configurable Simulation](#-configurable-simulation)
+- [Understanding The Output](#-understanding-the-output)
+- [Project Structure](#-project-structure)
+- [Two Analysis Modes](#-two-analysis-modes)
+- [Stress Testing](#-stress-testing)
+- [Troubleshooting](#-troubleshooting)
 
-| Aspect | Without ABI | With ABI |
-|--------|-------------|----------|
-| Function names | `unknown_sensitive_like_call` | `mint` |
-| Event names | `Transfer (standard ERC20 pattern)` | `Transfer` |
-| Decode confidence | low–medium | high |
-| Signal name | Possible Privileged Asset Extraction | Abnormal Privileged Mint and Extraction |
-| **Detection result** | **Same — HIGH confidence** | **Same — HIGH confidence** |
-
-Both modes use the **same derived schema**, the **same heuristics** (H1+H2+H3), and produce the **same signal**.
-
-## 📁 Folder Structure
-
-```
-forensics-mvp/
-├── src/DemoToken.sol              # Minimal ERC20-like token with owner-restricted mint
-├── script/
-│   ├── Deploy.s.sol               # Foundry deployment script
-│   └── SimulateAttack.s.sol       # Full attack simulation (baseline + suspicious)
-├── detector/
-│   ├── config.js                  # Central configuration (accounts, selectors, paths)
-│   ├── exportRaw.js               # A. Raw evidence collection from Anvil
-│   ├── normalize.js               # B. Convert raw → clean structured records
-│   ├── decode.js                  # C. Human-readable decoded views (ABI / non-ABI)
-│   ├── derive.js                  # D. Generalized derived forensic schema
-│   ├── heuristics.js              # E. Rule-based detection (H1, H2, H3)
-│   ├── signals.js                 # F. Final analyst-facing suspicious findings
-│   ├── reportOllama.js            # G. Ollama narrative report generation
-│   ├── graphs.js                  # H. Trace graph + incident timeline
-│   └── runPipeline.js             # Full pipeline orchestrator
-├── raw/                           # Exact blockchain evidence
-│   ├── transactions/              # Raw transaction data
-│   ├── receipts/                  # Raw receipt + log data
-│   ├── blocks/                    # Raw block data
-│   ├── traces/                    # debug_traceTransaction (callTracer)
-│   ├── state_diffs/               # prestateTracer with diffMode
-│   ├── abi/                       # ABI JSON + contract metadata
-│   ├── contracts/                 # Deployed contract info
-│   ├── ground_truth/              # Attack markers for validation
-│   └── event_signatures/          # Known topic/selector reference
-├── normalized/                    # Clean structured records
-├── decoded/                       # Human-readable decoded views
-│   ├── without_abi/
-│   └── with_abi/
-├── derived/                       # Generalized forensic facts
-│   ├── without_abi/
-│   └── with_abi/
-├── signals/                       # Final suspicious findings
-│   ├── without_abi/
-│   └── with_abi/
-├── reports/                       # Ollama narrative reports
-├── graphs/                        # Trace graph + timeline (JSON + Mermaid)
-├── package.json
-├── foundry.toml
-└── .env.example
-```
+---
 
 ## 🔧 Prerequisites
 
-- **Foundry** (forge, anvil, cast) — [Install](https://book.getfoundry.sh/getting-started/installation)
-- **Node.js** ≥ 18
-- **Ollama** (optional, for narrative reports) — [Install](https://ollama.ai)
+| Tool | Version | Purpose |
+|------|---------|---------|
+| **Node.js** | ≥ 18.x | Forensic pipeline runtime |
+| **Foundry** (forge, anvil, cast) | Latest | Smart contract compilation + local EVM chain |
+| **Ollama** | Latest (optional) | LLM narrative report generation |
+| **Git** | Any | Version control |
 
-## 🚀 Quick Start — End-to-End
+---
+
+## 🚀 Installation (New Laptop Setup)
+
+### Step 1: Install Node.js
+
+**Windows** (recommended):
+```powershell
+# Download and install from https://nodejs.org/ (LTS version)
+# Or via winget:
+winget install OpenJS.NodeJS.LTS
+
+# Verify:
+node --version    # Should show v18.x or higher
+npm --version
+```
+
+**macOS**:
+```bash
+brew install node
+```
+
+**Linux**:
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+### Step 2: Install Foundry (Forge, Anvil, Cast)
+
+**Windows (PowerShell)**:
+```powershell
+# Install foundryup
+curl -L https://foundry.paradigm.xyz | bash
+
+# Then run foundryup (may need to restart terminal)
+foundryup
+
+# Verify:
+forge --version
+anvil --version
+cast --version
+```
+
+**macOS / Linux**:
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+```
+
+> **Note**: On Windows, Foundry installs to `%USERPROFILE%\.foundry\bin`. You may need to add this to your PATH or restart your terminal.
+
+### Step 3: Install Ollama (Optional — for LLM reports)
+
+**Windows**: Download from [https://ollama.ai](https://ollama.ai)
+
+**macOS**:
+```bash
+brew install ollama
+```
+
+**Linux**:
+```bash
+curl -fsSL https://ollama.ai/install.sh | sh
+```
+
+After installing:
+```bash
+# Start Ollama service
+ollama serve
+
+# Pull the model (in a separate terminal)
+ollama pull gemma3:1b
+```
+
+### Step 4: Clone & Setup The Project
 
 ```bash
-# 1. Install Node.js dependencies
-cd forensics-mvp
+# Clone the repository
+git clone <your-repo-url>
+cd AdminAttackSim/forensics-mvp
+
+# Install Foundry dependencies
+forge install foundry-rs/forge-std --no-git
+
+# Install Node.js dependencies
 npm install
 
-# 2. Start Anvil (local EVM chain) — keep this running in a separate terminal
+# Build the smart contracts
+forge build
+
+# copy environment file
+cp .env.example .env
+```
+
+### Step 5: Verify Everything Works
+
+```bash
+# Check all tools are available:
+node --version       # ≥ 18.x
+forge --version      # Should show foundry version
+anvil --version      # Should show anvil version
+
+# Quick test — start Anvil (should print account info):
+anvil --host 127.0.0.1 --port 8545 --block-time 1
+# Press Ctrl+C to stop after verifying it works
+```
+
+---
+
+## ⚡ Quick Start
+
+### Option A: Automated (Recommended)
+
+```bash
+# Terminal 1: Start the local EVM chain
 anvil --host 127.0.0.1 --port 8545 --block-time 1
 
-# 3. Deploy DemoToken contract
+# Terminal 2: Run simulation + analysis
+cd forensics-mvp
+
+# Simulate attack (1 attack, auto-baseline)
+node detector/simulate.js --attacks 1
+
+# Run full forensic pipeline
+node detector/runPipeline.js all
+```
+
+### Option B: Using Foundry Scripts (Original Method)
+
+```bash
+# Terminal 1: Anvil
+anvil --host 127.0.0.1 --port 8545 --block-time 1
+
+# Terminal 2: Deploy + Simulate + Analyze
+cd forensics-mvp
 forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
-
-# 4. Run attack simulation (baseline activity + suspicious incident)
 forge script script/SimulateAttack.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
-
-# 5. Export raw evidence from Anvil
 node detector/exportRaw.js
+node detector/runPipeline.js all
+```
 
-# 6. Run full forensic pipeline (both modes)
+### What Happens
+
+1. Anvil starts a local blockchain with 10 pre-funded accounts
+2. `simulate.js` deploys DemoToken, generates baseline noise, runs attack cycles
+3. `exportRaw.js` is auto-called to collect all evidence from the chain
+4. `runPipeline.js` runs normalization → decoding → derivation → heuristics → signals → reports → graphs
+5. All outputs are saved to `runs/<timestamp>/`
+
+---
+
+## 🎛️ Configurable Simulation
+
+The Node.js simulator accepts CLI arguments for flexible testing:
+
+```bash
+# Default: 1 attack, 5 baseline transactions
+node detector/simulate.js
+
+# Custom attacks and baseline
+node detector/simulate.js --attacks 5 --baseline 20
+
+# Just set attacks (baseline auto-scales to 3× attacks)
+node detector/simulate.js --attacks 10
+
+# Stress tests
+node detector/simulate.js --attacks 100 --baseline 200
+node detector/simulate.js --attacks 1000 --baseline 2000
+```
+
+### npm shortcuts
+
+```bash
+npm run sim                  # Default: 1 attack
+npm run sim:stress           # 100 attacks + 200 baseline
+npm run sim -- --attacks 50  # Custom via npm
+```
+
+### Transaction Count
+
+```
+Total = 1 (deploy) + baseline + (attacks × 3)
+
+1 attack, 5 baseline   →  9 transactions
+5 attacks, 20 baseline  →  36 transactions
+100 attacks, 200 base   →  501 transactions
+```
+
+---
+
+## 📊 Understanding The Output
+
+### Runs Folder
+
+Every pipeline run creates a timestamped folder:
+
+```
+runs/
+└── 2026-03-17_01-06-13/
+    ├── run_manifest.json           ← Run metadata
+    ├── raw_snapshot/               ← Evidence snapshot
+    ├── normalized/                 ← Structured records
+    ├── decoded/
+    │   ├── without_abi/            ← Generic decoded views
+    │   └── with_abi/               ← ABI-decoded views
+    ├── derived/
+    │   ├── without_abi/            ← Forensic facts + heuristics
+    │   └── with_abi/
+    ├── signals/
+    │   ├── without_abi/            ← Suspicious findings
+    │   └── with_abi/
+    ├── reports/
+    │   ├── decoded_forensic_report_without_abi.md    ← Tool accuracy report
+    │   ├── decoded_forensic_report_with_abi.md       ← Tool accuracy report
+    │   ├── narrative_forensic_report_without_abi.md  ← Ollama LLM report
+    │   └── narrative_forensic_report_with_abi.md     ← Ollama LLM report
+    └── graphs/
+        ├── trace_graph_*.json / *.mmd               ← Value flow
+        └── incident_timeline_*.json / *.mmd          ← Event sequence
+```
+
+### Key Files To Check
+
+```bash
+# Signal summary — quick yes/no on detection
+cat runs/*/signals/with_abi/signal_summary.json
+
+# Decoded forensic report — full accuracy scorecard
+cat runs/*/reports/decoded_forensic_report_with_abi.md
+
+# Narrative report — LLM explanation
+cat runs/*/reports/narrative_forensic_report_with_abi.md
+
+# Trace graph — visual fund flow (open in Mermaid viewer)
+cat runs/*/graphs/trace_graph_with_abi.mmd
+```
+
+---
+
+## 📁 Project Structure
+
+```
+forensics-mvp/
+├── src/
+│   └── DemoToken.sol                 # Minimal ERC20 with owner-only mint
+├── script/
+│   ├── Deploy.s.sol                  # Foundry deployment script
+│   └── SimulateAttack.s.sol          # Legacy Foundry simulation (1 attack)
+├── detector/
+│   ├── config.js                     # Central config (accounts, paths, thresholds)
+│   ├── simulate.js                   # ⭐ Configurable Node.js simulator
+│   ├── exportRaw.js                  # Raw evidence collection
+│   ├── normalize.js                  # Raw → structured records
+│   ├── decode.js                     # Decoded views (ABI / non-ABI)
+│   ├── derive.js                     # Forensic facts schema
+│   ├── heuristics.js                 # H1, H2, H3 detection rules
+│   ├── signals.js                    # Final suspicious findings
+│   ├── reportOllama.js               # ⭐ Two-report generator
+│   ├── graphs.js                     # Trace + timeline graphs
+│   └── runPipeline.js                # Pipeline orchestrator (runs/ system)
+├── runs/                             # ⭐ Per-run output (git-ignored)
+├── raw/                              # Raw evidence (git-ignored)
+├── SIMULATION_REPORT.md              # ⭐ Full attack & detection docs
+├── README.md                         # This file
+├── package.json
+├── foundry.toml
+├── .env.example
+└── .gitignore
+```
+
+---
+
+## 🔬 Two Analysis Modes
+
+| Aspect | Without ABI | With ABI |
+|--------|-------------|----------|
+| Function labels | `unknown_sensitive_like_call` | `mint` |
+| Event labels | `Transfer (standard ERC20 pattern)` | `Transfer` |
+| Confidence | Low–Medium | High |
+| Signal name | Possible Privileged Asset Extraction | Abnormal Privileged Mint and Extraction |
+| **Detection result** | **✅ HIGH** | **✅ HIGH** |
+
+> ABI is enrichment, not the foundation.
+
+---
+
+## 🏋️ Stress Testing
+
+```bash
+# Anvil (Terminal 1)
+anvil --host 127.0.0.1 --port 8545 --block-time 1
+
+# Stress test (Terminal 2)
+node detector/simulate.js --attacks 100 --baseline 200
 node detector/runPipeline.js all
 
-# 7. (Optional) Generate Ollama reports if Ollama is running
-#    ollama pull llama3.2
-node detector/reportOllama.js all
+# Check accuracy
+cat runs/*/reports/decoded_forensic_report_with_abi.md | head -50
 ```
 
-## 📊 Inspect Results
+Expected at any scale: **100% recall, 100% precision, 0% false positives**.
 
-### Raw Evidence
+---
+
+## 🔧 Troubleshooting
+
+### "forge not found"
 ```bash
-# Raw transactions and receipts
-cat raw/transactions/_all_transactions.json
-cat raw/receipts/_all_receipts.json
+# Add Foundry to PATH (Windows):
+$env:PATH = "$env:USERPROFILE\.foundry\bin;$env:PATH"
 
-# Raw ABI (enrichment only)
-cat raw/abi/DemoToken.abi.json
-cat raw/abi/DemoToken.metadata.json
-
-# Raw traces and state diffs
-ls raw/traces/
-ls raw/state_diffs/
-
-# Ground-truth attack markers
-cat raw/ground_truth/attack_markers.json
+# Or run foundryup again:
+foundryup
 ```
 
-### Decoded Views
+### "Connection refused" on exportRaw.js
 ```bash
-# Without ABI — generic decoding
-cat decoded/without_abi/decoded_summary.json
-
-# With ABI — precise function/event names
-cat decoded/with_abi/decoded_summary.json
+# Make sure Anvil is running:
+anvil --host 127.0.0.1 --port 8545 --block-time 1
 ```
 
-### Derived Facts
+### "Ollama unavailable" in reports
 ```bash
-cat derived/without_abi/derived_facts.json
-cat derived/with_abi/derived_facts.json
+# Start Ollama first:
+ollama serve
+ollama pull gemma3:1b
+
+# The decoded forensic report works without Ollama
+# Only the narrative report needs it
 ```
 
-### Heuristics & Signals
+### "Contract artifact not found"
 ```bash
-cat derived/without_abi/heuristic_results.json
-cat signals/without_abi/signal_summary.json
-cat signals/with_abi/signal_summary.json
+# Build contracts first:
+forge build
 ```
 
-### Graphs
+### Empty runs/ folder
 ```bash
-# Trace graph (value flow) — JSON + Mermaid
-cat graphs/trace_graph_without_abi.json
-cat graphs/trace_graph_without_abi.mmd
-
-# Incident timeline — JSON + Mermaid
-cat graphs/incident_timeline_without_abi.json
-cat graphs/incident_timeline_without_abi.mmd
+# Make sure you ran the simulation + export before pipeline:
+node detector/simulate.js --attacks 1
+node detector/runPipeline.js all
 ```
 
-### Ground-Truth Validation
-Compare the ground-truth markers with the pipeline outputs:
-```bash
-# Ground truth
-cat raw/ground_truth/attack_markers.json
+---
 
-# Signal output — should match the same suspicious tx hashes
-cat signals/without_abi/signals.json
-cat signals/with_abi/signals.json
-```
-
-## 🧠 Pipeline Architecture
-
-```
-Raw Evidence → Normalization → Decoded View → Derived Facts → Heuristics → Signal → Ollama Report
-                                                                                  → Graph Views
-```
-
-### Heuristics
-| ID | Name | Logic |
-|----|------|-------|
-| H1 | Sensitive Action With Large Movement | Sensitive/mint-like action with token movement > 10× baseline |
-| H2 | Rapid Follow-Up Extraction | Tokens move to staging/exit within 5 blocks |
-| H3 | Deviation From Baseline | Suspicious amount > 100× normal baseline activity |
-
-### Signal Firing
-- **Medium** → H1 only
-- **High** → H1 + H2
-- **High (strongest)** → H1 + H2 + H3
-
-## 🏗️ Design Principles
+## 📝 Design Principles
 
 1. **ABI is enrichment, not the foundation** — Detection works without ABI
-2. **Same derived schema** in both modes — Only decoding richness differs
-3. **Raw evidence is preserved** — Decoded interpretation never overwrites raw
-4. **Ground-truth validation** — Explicit markers enable accuracy verification
-5. **File-based, deterministic** — Easy to rerun and inspect manually
-6. **Ollama explains, rules detect** — LLM is the narrator, not the detector
+2. **Same derived schema** in both modes — Only decode richness differs
+3. **Raw evidence is preserved** — Decoded views never overwrite raw
+4. **Ground-truth validation** — Every run can be validated against markers
+5. **File-based, deterministic** — Each run is self-contained in runs/
+6. **Ollama explains, rules detect** — LLM narrates, heuristics decide
+7. **Configurable** — Scale from 1 to 1000+ attacks
+
+---
 
 ## 📝 License
 
